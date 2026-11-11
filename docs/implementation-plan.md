@@ -34,7 +34,7 @@ The initial workspace contained only `Mission.md`. No data, artifacts, tests, or
 - Milestone 1 complete: local FastAPI readiness API, React/Vite/Tailwind shell, explicit missing-data/model states, and repository guidance.
 - Milestones 2-3 complete: UCI SMS and bike data were downloaded and parsed; starter and AI Lead models were trained, validation-evaluated, and run once through the organiser-only test CLI. Student exports contain training and validation rows only.
 - Milestone 4 pipeline complete, training blocked: image manifest ingestion, duplicate checks, object-disjoint splitting, ResNet training/evaluation, upload inference, and collection instructions are implemented. No pilot images were present, so no CV model or metrics were produced.
-- Milestone 5 complete for trained text/bike artifacts: API startup loading, local inference, validation summary, and benchmark UI are connected. Vision remains awaiting its dataset.
+- Milestone 5 complete for trained text/bike artifacts: API startup loading, local inference, validation summary, benchmark UI, and strict CSV-only validation submissions are connected. Vision remains awaiting its dataset.
 - Milestone 6 complete for tests, docs, and notebook walkthrough. The notebook's safe default path was executed; its download/training flags remain off.
 
 Measured validation results are recorded in ignored local reports and the frontend summary. On this run SMS macro-F1 was 0.858 (starter) and 0.950 (AI Lead); bike MAE was 125.9 and 45.3 rentals/hour respectively. Results are specific to these fixed splits and do not imply future performance.
@@ -46,6 +46,7 @@ Measured validation results are recorded in ignored local reports and the fronte
 - **CV training hardware:** CPU is supported but may be slow. CUDA is optional; record the actual device in run metadata. Inference is CPU-compatible.
 - **Pretrained weights:** torchvision's approved ImageNet ResNet-18 weights are fetched only when training is requested and are cached by torchvision. No weights are silently substituted.
 - **Final test privacy:** local test split files and labels are ignored by Git. Never publish them or route test metrics to the student UI. Student-distributed data must contain training and validation rows only.
+- **Free hosting:** GitHub Pages serves only the Vite static bundle. The Render Blueprint trains text/bike artifacts during build, removes test CSVs and dataset ZIPs before runtime, and keeps validation-only scoring in the API. Render Free sleeps when idle and uses ephemeral storage; it is for a workshop demo, not a production availability promise.
 
 ## Data sources and task limits
 
@@ -54,3 +55,5 @@ Measured validation results are recorded in ignored local reports and the fronte
 - Equipment: locally collected and consented Tech Society pilot images only. One primary object per image; no identification, damage assessment, ownership claim, or automatic inventory updates.
 
 All three tasks are educational prototypes and may fail on distribution shifts. Scores are not guarantees. Low-score thresholds, if enabled, are validation-selected warnings only and do not provide unknown-object detection.
+
+Student submissions use an exact `row_id,prediction` CSV schema. IDs are opaque and generated separately from model features. The API checks exact validation row coverage, class labels or finite numeric values, and file size; it does not persist the CSV or load arbitrary artifacts. The final test partition is not available through these endpoints.

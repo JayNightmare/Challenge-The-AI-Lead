@@ -13,6 +13,7 @@ from PIL import Image
 
 from ml.common.artifacts import DATA, ROOT, REPORTS, sha256_file
 from ml.common.metrics import classification_metrics
+from ml.common.row_ids import row_ids_for
 
 CLASSES = ["keyboard", "mouse", "headphones"]
 SEED = 42
@@ -431,10 +432,12 @@ def export_student_data() -> Path:
     source_root = DATA / "raw" / "equipment"
     output = DATA / "student" / "vision"
     output.mkdir(parents=True, exist_ok=True)
-    rows = pd.concat(
-        [pd.read_csv(processed / f"{name}.csv") for name in ("train", "validation")],
-        ignore_index=True,
-    )
+    split_frames = []
+    for split_name in ("train", "validation"):
+        split = pd.read_csv(processed / f"{split_name}.csv")
+        split.insert(0, "row_id", row_ids_for("vision", split, split_name))
+        split_frames.append(split)
+    rows = pd.concat(split_frames, ignore_index=True)
     for image_path in rows["image_path"].unique():
         source = source_root / image_path
         destination = output / image_path

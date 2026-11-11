@@ -1,0 +1,27 @@
+services:
+        - type: web
+          name: everyday-ai-api
+          runtime: python
+          plan: free
+          branch: main
+          buildCommand: |
+                  pip install -e .
+                  python -m ml.text.cli prepare
+                  python -m ml.text.cli train --model-id starter
+                  python -m ml.text.cli train --model-id ai-lead
+                  python -m ml.tabular.cli prepare
+                  python -m ml.tabular.cli train --model-id starter
+                  python -m ml.tabular.cli train --model-id ai-lead
+                  python -m ml.text.cli evaluate --model-id starter --split validation
+                  python -m ml.text.cli evaluate --model-id ai-lead --split validation
+                  python -m ml.tabular.cli evaluate --model-id starter --split validation
+                  python -m ml.tabular.cli evaluate --model-id ai-lead --split validation
+                  rm -f data/processed/text/test.csv data/processed/tabular/test.csv data/raw/*.zip
+          startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+          healthCheckPath: /api/health
+          autoDeploy: true
+          envVars:
+                  - key: PYTHON_VERSION
+                    value: 3.12.3
+                  - key: EVERYDAY_AI_CORS_ORIGINS
+                    value: https://jaynightmare.github.io

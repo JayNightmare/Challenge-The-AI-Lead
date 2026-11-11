@@ -19,6 +19,7 @@ from ml.common.artifacts import (
     sha256_file,
 )
 from ml.common.metrics import regression_metrics
+from ml.common.row_ids import row_ids_for
 from ml.common.splits import chronological_splits
 
 SOURCE_URL = "https://archive.ics.uci.edu/static/public/275/bike+sharing+dataset.zip"
@@ -270,9 +271,9 @@ def export_student_data() -> Path:
     output = DATA / "student" / "tabular"
     output.mkdir(parents=True, exist_ok=True)
     for split_name in ("train", "validation"):
-        (output / f"{split_name}.csv").write_bytes(
-            (processed / f"{split_name}.csv").read_bytes()
-        )
+        split = pd.read_csv(processed / f"{split_name}.csv")
+        split.insert(0, "row_id", row_ids_for("tabular", split, split_name))
+        split.to_csv(output / f"{split_name}.csv", index=False)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["counts"] = {
         key: manifest["counts"][key] for key in ("train", "validation")

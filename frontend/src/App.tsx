@@ -10,6 +10,7 @@ import {
 	Clock3,
 	Cpu,
 	Database,
+	Download,
 	FileImage,
 	FlaskConical,
 	Gauge,
@@ -26,6 +27,7 @@ import {
 type TaskId = "vision" | "text" | "tabular";
 type PageId = "home" | TaskId | "results" | "sources";
 type ModelId = "starter" | "ai-lead";
+type FighterId = ModelId | "student";
 
 type TaskReadiness = {
 	status: string;
@@ -54,6 +56,12 @@ type TaskMetadata = {
 };
 type Metadata = { tasks: Record<TaskId, TaskMetadata> };
 type Prediction = Record<string, unknown>;
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(
+	/\/$/,
+	"",
+);
+const apiUrl = (path: string) => `${API_BASE_URL}${path}`;
 
 const tasks: {
 	id: TaskId;
@@ -137,8 +145,8 @@ function useLocalState() {
 			try {
 				const [healthResponse, metadataResponse] =
 					await Promise.all([
-						fetch("/api/health"),
-						fetch("/api/metadata"),
+						fetch(apiUrl("/api/health")),
+						fetch(apiUrl("/api/metadata")),
 					]);
 				if (!healthResponse.ok || !metadataResponse.ok)
 					throw new Error(
@@ -769,7 +777,9 @@ function VisionMistakes({ metadata }: { metadata: TaskMetadata }) {
 			{mistakes.map((mistake) => (
 				<figure key={mistake.row_index}>
 					<img
-						src={`/api/vision/validation-examples/${mistake.row_index}/image?model_id=${report.model_id}`}
+						src={apiUrl(
+							`/api/vision/validation-examples/${mistake.row_index}/image?model_id=${report.model_id}`,
+						)}
 						alt={`Approved validation image. The model predicted ${mistake.predicted}; the recorded category is ${mistake.expected}.`}
 					/>
 					<figcaption>
@@ -818,10 +828,13 @@ function VisionDemo({ readiness }: { readiness: TaskReadiness | null }) {
 			const form = new FormData();
 			form.append("file", file);
 			form.append("model_id", model);
-			const response = await fetch("/api/predict/vision", {
-				method: "POST",
-				body: form,
-			});
+			const response = await fetch(
+				apiUrl("/api/predict/vision"),
+				{
+					method: "POST",
+					body: form,
+				},
+			);
 			const body = await response.json();
 			if (!response.ok)
 				throw new Error(
@@ -1047,11 +1060,20 @@ function TextDemo({ readiness }: { readiness: TaskReadiness | null }) {
 		setError("");
 		setResult(null);
 		try {
-			const response = await fetch("/api/predict/text", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ text, model_id: model }),
-			});
+			const response = await fetch(
+				apiUrl("/api/predict/text"),
+				{
+					method: "POST",
+					headers: {
+						"Content-Type":
+							"application/json",
+					},
+					body: JSON.stringify({
+						text,
+						model_id: model,
+					}),
+				},
+			);
 			const body = await response.json();
 			if (!response.ok)
 				throw new Error(
@@ -1237,11 +1259,17 @@ function BikeDemo({ readiness }: { readiness: TaskReadiness | null }) {
 		setError("");
 		setResult(null);
 		try {
-			const response = await fetch("/api/predict/tabular", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(values),
-			});
+			const response = await fetch(
+				apiUrl("/api/predict/tabular"),
+				{
+					method: "POST",
+					headers: {
+						"Content-Type":
+							"application/json",
+					},
+					body: JSON.stringify(values),
+				},
+			);
 			const body = await response.json();
 			if (!response.ok)
 				throw new Error(
@@ -1733,6 +1761,117 @@ function BikeResult({ result }: { result: Prediction }) {
 	);
 }
 
+function PredictionSubmission({
+	taskId,
+	enabled,
+	onComplete,
+}: {
+	taskId: TaskId;
+	enabled: boolean;
+	onComplete: (metrics: Record<string, unknown>) => void;
+}) {
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	const submit = async (file: File) => {
+		setBusy(true);
+		setError("");
+		try {
+			const form = new FormData();
+			form.append("file", file);
+			const response = await fetch(
+				apiUrl(`/api/submissions/${taskId}`),
+				{
+					method: "POST",
+					body: form,
+				},
+			);
+			const body = await response.json();
+			if (!response.ok)
+				throw new Error(
+					String(
+						body.detail ??
+							"Prediction CSV was rejected.",
+					),
+				);
+			onComplete(body.metrics as Record<string, unknown>);
+		} catch (reason) {
+			setError(
+				reason instanceof Error
+					? reason.message
+					: "Unable to reach the local API.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<div className="prediction-submission">
+			<div className="eyebrow">
+				YOU · VALIDATION PREDICTIONS
+			</div>
+			{enabled ? (
+				<div className="prediction-submission-actions">
+					<a
+						className="button button-outline"
+						href={apiUrl(
+							`/api/submissions/${taskId}/template`,
+						)}
+						download
+					>
+						<Download size={15} /> Get row
+						IDs
+					</a>
+					<label
+						className={`button button-lime ${busy ? "disabled" : ""}`}
+					>
+						{busy ? (
+							<LoaderCircle
+								className="spin"
+								size={15}
+							/>
+						) : (
+							<Upload size={15} />
+						)}
+						Upload CSV
+						<input
+							className="csv-upload-input"
+							type="file"
+							accept=".csv,text/csv"
+							disabled={busy}
+							onChange={(event) => {
+								const file =
+									event
+										.currentTarget
+										.files?.[0];
+								if (file)
+									void submit(
+										file,
+									);
+								event.currentTarget.value =
+									"";
+							}}
+						/>
+					</label>
+				</div>
+			) : (
+				<p className="submission-unavailable">
+					Prediction upload unavailable until a
+					local model and validation set exist.
+				</p>
+			)}
+			<p className="submission-safety">
+				CSV predictions only. Model code is never
+				accepted; scoring uses validation rows only.
+			</p>
+			{error && (
+				<p className="submission-error" role="alert">
+					{error}
+				</p>
+			)}
+		</div>
+	);
+}
+
 function ResultsPage({
 	metadata,
 	readiness,
@@ -1742,21 +1881,31 @@ function ResultsPage({
 }) {
 	const [taskId, setTaskId] = useState<TaskId>("text");
 	const [slots, setSlots] = useState<{
-		you: ModelId | null;
-		lead: ModelId | null;
-	}>({ you: null, lead: null });
+		you: FighterId | null;
+	}>({ you: null });
+	const [submissionMetrics, setSubmissionMetrics] = useState<Record<
+		string,
+		unknown
+	> | null>(null);
 	const taskMeta = metadata.tasks[taskId];
-	const onDrop = (slot: "you" | "lead") => (event: React.DragEvent) => {
+	const onDrop = (event: React.DragEvent) => {
 		event.preventDefault();
 		const value = event.dataTransfer.getData(
 			"text/model",
 		) as ModelId;
-		if (value === "starter" || value === "ai-lead")
-			setSlots((current) => ({ ...current, [slot]: value }));
+		if (value === "starter") setSlots({ you: value });
 	};
-	const modelMetrics = (model: ModelId | null) =>
-		model ? taskMeta.validation_metrics[model]?.metrics : null;
-	const score = (model: ModelId | null) => {
+	const modelMetrics = (model: FighterId | null) =>
+		model === "student"
+			? submissionMetrics
+			: model
+				? taskMeta.validation_metrics[model]?.metrics
+				: null;
+	const opponentReady =
+		readiness?.tasks[taskId].available_models.includes("ai-lead") ??
+		false;
+	const opponentMetrics = modelMetrics("ai-lead");
+	const score = (model: FighterId | null) => {
 		const metric = modelMetrics(model);
 		return metric
 			? taskId === "tabular"
@@ -1803,8 +1952,10 @@ function ResultsPage({
 								);
 								setSlots({
 									you: null,
-									lead: null,
 								});
+								setSubmissionMetrics(
+									null,
+								);
 							}}
 						>
 							{task.symbol}
@@ -1817,64 +1968,81 @@ function ResultsPage({
 					<div className="eyebrow">
 						AVAILABLE BASELINES
 					</div>
-					{(["starter", "ai-lead"] as const).map(
-						(id) => {
-							const available =
-								readiness?.tasks[
-									taskId
-								].available_models.includes(
-									id,
-								) ?? false;
-							return (
-								<div
-									key={id}
-									className={`draggable-model ${available ? "can-drag" : "unavailable"}`}
-									draggable={
-										available
-									}
-									onDragStart={(
-										event,
-									) => {
-										event.dataTransfer.setData(
-											"text/model",
-											id,
-										);
-									}}
+					{(["starter"] as const).map((id) => {
+						const available =
+							readiness?.tasks[
+								taskId
+							].available_models.includes(
+								id,
+							) ?? false;
+						return (
+							<div
+								key={id}
+								className={`draggable-model ${available ? "can-drag" : "unavailable"}`}
+								draggable={
+									available
+								}
+								onDragStart={(
+									event,
+								) => {
+									event.dataTransfer.setData(
+										"text/model",
+										id,
+									);
+								}}
+							>
+								<span
+									className={`model-mini ${id}`}
 								>
-									<span
-										className={`model-mini ${id}`}
-									>
+									{id ===
+									"starter"
+										? "S"
+										: "AI"}
+								</span>
+								<div>
+									<b>
 										{id ===
 										"starter"
-											? "S"
-											: "AI"}
-									</span>
-									<div>
-										<b>
-											{id ===
-											"starter"
-												? "Starter baseline"
-												: "AI Lead"}
-										</b>
-										<small>
-											{available
-												? "Drag into the fight"
-												: "Model not trained"}
-										</small>
-									</div>
-									<ArrowUpRight
-										size={
-											15
-										}
-									/>
+											? "Starter baseline"
+											: "AI Lead"}
+									</b>
+									<small>
+										{available
+											? "Drag into the fight"
+											: "Model not trained"}
+									</small>
 								</div>
+								<ArrowUpRight
+									size={
+										15
+									}
+								/>
+							</div>
+						);
+					})}
+					<PredictionSubmission
+						taskId={taskId}
+						enabled={Boolean(
+							readiness?.tasks[
+								taskId
+							].available_models.includes(
+								"starter",
+							) &&
+							readiness?.tasks[
+								taskId
+							].available_models.includes(
+								"ai-lead",
+							),
+						)}
+						onComplete={(metrics) => {
+							setSubmissionMetrics(
+								metrics,
 							);
-						},
-					)}
-					<p>
-						Only local artifacts can enter
-						the fight.
-					</p>
+							setSlots({
+								you: "student",
+							});
+						}}
+					/>
 				</div>
 				<div className="fight-ring">
 					<div className="ring-topline">
@@ -1887,79 +2055,81 @@ function ResultsPage({
 						</span>
 					</div>
 					<div className="fighter-slots">
-						{(["you", "lead"] as const).map(
-							(slot) => {
-								const model =
-									slots[
-										slot
-									];
-								const metrics =
-									modelMetrics(
-										model,
-									);
-								return (
-									<div
-										key={
-											slot
-										}
-										className={`fighter-slot ${slot}`}
-										onDragOver={(
-											event,
-										) =>
-											event.preventDefault()
-										}
-										onDrop={onDrop(
-											slot,
-										)}
-									>
-										<span className="fighter-label">
-											{slot ===
-											"you"
-												? "YOU PICKED"
-												: "AI LEAD"}
-										</span>
-										<div className="fighter-symbol">
-											{model
-												? model ===
-													"starter"
-													? "S"
-													: "AI"
-												: slot ===
-													  "you"
-													? "?"
-													: "✳"}
-										</div>
-										<b>
-											{model
-												? model ===
-													"starter"
-													? "Starter"
-													: "AI Lead"
-												: "Drop a model"}
-										</b>
-										<strong>
-											{score(
-												model,
-											)}
-										</strong>
-										{metrics && (
-											<span className="metric-detail">
-												{taskId ===
-												"tabular"
-													? `RMSE ${Number(metrics.rmse).toFixed(1)}`
-													: `Accuracy ${Number(metrics.accuracy).toFixed(3)}`}
-											</span>
-										)}
-									</div>
-								);
-							},
-						)}
+						<div
+							className="fighter-slot you"
+							onDragOver={(event) =>
+								event.preventDefault()
+							}
+							onDrop={onDrop}
+						>
+							<span className="fighter-label">
+								YOU
+							</span>
+							<div className="fighter-symbol">
+								{slots.you ===
+								"student"
+									? "YOU"
+									: slots.you ===
+										  "starter"
+										? "S"
+										: "?"}
+							</div>
+							<b>
+								{slots.you ===
+								"student"
+									? "Your predictions"
+									: slots.you ===
+										  "starter"
+										? "Starter baseline"
+										: "Drop Starter or upload CSV"}
+							</b>
+							<strong>
+								{score(
+									slots.you,
+								)}
+							</strong>
+							{modelMetrics(
+								slots.you,
+							) && (
+								<span className="metric-detail">
+									{taskId ===
+									"tabular"
+										? `RMSE ${Number(modelMetrics(slots.you)?.rmse).toFixed(1)}`
+										: `Accuracy ${Number(modelMetrics(slots.you)?.accuracy).toFixed(3)}`}
+								</span>
+							)}
+						</div>
+						<div className="fighter-slot lead fixed-opponent">
+							<span className="fighter-label">
+								PRELOADED
+								OPPONENT
+							</span>
+							<div className="fighter-symbol">
+								AI
+							</div>
+							<b>AI Lead</b>
+							<strong>
+								{opponentReady
+									? score(
+											"ai-lead",
+										)
+									: "Model not trained"}
+							</strong>
+							{opponentMetrics && (
+								<span className="metric-detail">
+									{taskId ===
+									"tabular"
+										? `RMSE ${Number(opponentMetrics.rmse).toFixed(1)}`
+										: `Accuracy ${Number(opponentMetrics.accuracy).toFixed(3)}`}
+								</span>
+							)}
+						</div>
 					</div>
 					<div className="fight-verdict">
 						{slots.you &&
-						slots.lead &&
+						opponentReady &&
 						modelMetrics(slots.you) &&
-						modelMetrics(slots.lead) ? (
+						opponentMetrics ? (
 							<>
 								<Check
 									size={

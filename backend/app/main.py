@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,11 +13,14 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 
 from backend.app.schemas import BikeRequest, TextRequest
+from backend.app.submissions import MAX_SUBMISSION_BYTES, parse_prediction_csv
 from ml.common.artifacts import DATA, REPORTS, load_metadata, model_paths
+from ml.common.metrics import classification_metrics, regression_metrics
+from ml.common.row_ids import row_ids_for
 from ml.tabular.pipeline import FEATURES
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -28,6 +32,12 @@ LOCAL_ORIGINS = [
     "http://127.0.0.1:4173",
     "http://localhost:4173",
 ]
+CONFIGURED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("EVERYDAY_AI_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CORS_ORIGINS = list(dict.fromkeys([*LOCAL_ORIGINS, *CONFIGURED_ORIGINS]))
 TASK_MODEL_IDS = {
     "text": ["starter", "ai-lead"],
     "tabular": ["starter", "ai-lead"],
@@ -83,7 +93,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Everyday AI local demo", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=LOCAL_ORIGINS,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
@@ -139,6 +149,139 @@ def _read_validation_metrics(task: str) -> dict[str, Any]:
             except (OSError, json.JSONDecodeError):
                 continue
     return result
+
+
+def _validation_frame(task: str) -> pd.DataFrame:
+    split_path = DATA / "processed" / task / "validation.csv"
+    if not split_path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "awaiting_data", "task": task},
+        )
+    frame = pd.read_csv(split_path)
+    frame.insert(0, "row_id", row_ids_for(task, frame, "validation"))
+    return frame
+
+
+@app.get("/api/submissions/{task}/template")
+def submission_template(task: str) -> Response:
+    if task not in {"text", "tabular", "vision"}:
+        raise HTTPException(status_code=404, detail="Unknown task")
+    validation = _validation_frame(task)
+    template = pd.DataFrame(
+        {"row_id": validation["row_id"], "prediction": [""] * len(validation)}
+    )
+    return Response(
+        content=template.to_csv(index=False),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{task}-validation-predictions.csv"'
+        },
+    )
+
+
+@app.post("/api/submissions/{task}")
+async def submit_validation_predictions(
+    task: str, request: Request, file: UploadFile = File(...)
+) -> dict[str, Any]:
+    if task not in {"text", "tabular", "vision"}:
+        raise HTTPException(status_code=404, detail="Unknown task")
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(status_code=415, detail="Upload a .csv prediction file")
+    if file.content_type not in {
+        "text/csv",
+        "application/csv",
+        "application/vnd.ms-excel",
+        "application/octet-stream",
+    }:
+        raise HTTPException(status_code=415, detail="Upload a CSV text file")
+    contents = await file.read(MAX_SUBMISSION_BYTES + 1)
+    validation = _validation_frame(task)
+    try:
+        uploaded = parse_prediction_csv(contents, validation["row_id"].tolist())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    indexed = validation.set_index("row_id", drop=False)
+    ordered = indexed.loc[uploaded["row_id"].tolist()]
+    baselines: dict[str, Any] = {}
+
+    if task == "text":
+        valid_labels = {"ham", "spam"}
+        if not set(uploaded["prediction"]) <= valid_labels:
+            raise HTTPException(
+                status_code=422, detail="Text predictions must be ham or spam"
+            )
+        expected = ordered["label"].astype(str).tolist()
+        student_predictions = uploaded["prediction"].tolist()
+        for model_id in TASK_MODEL_IDS[task]:
+            loaded = _require_model(request, task, model_id)
+            predicted = loaded["estimator"].predict(ordered["text"].astype(str))
+            baselines[model_id] = classification_metrics(
+                expected, [str(value) for value in predicted], ["ham", "spam"]
+            )
+        submitted_metrics = classification_metrics(
+            expected, student_predictions, ["ham", "spam"]
+        )
+    elif task == "tabular":
+        numeric = pd.to_numeric(uploaded["prediction"], errors="coerce").to_numpy(
+            dtype=float
+        )
+        if not np.isfinite(numeric).all():
+            raise HTTPException(
+                status_code=422, detail="Bike predictions must be finite numbers"
+            )
+        expected = ordered["cnt"].to_numpy(dtype=float)
+        student_predictions = np.maximum(numeric, 0.0)
+        for model_id in TASK_MODEL_IDS[task]:
+            loaded = _require_model(request, task, model_id)
+            predicted = np.maximum(loaded["estimator"].predict(ordered[FEATURES]), 0.0)
+            baselines[model_id] = regression_metrics(expected, predicted)
+        submitted_metrics = regression_metrics(expected, student_predictions)
+        submitted_metrics["prediction_unit"] = "rentals per hour"
+        submitted_metrics["negative_outputs_clamped_to_zero"] = True
+    else:
+        import torch
+        from torch.utils.data import DataLoader
+
+        from ml.vision.pipeline import CLASSES, _dataset
+
+        valid_labels = set(CLASSES)
+        if not set(uploaded["prediction"]) <= valid_labels:
+            raise HTTPException(
+                status_code=422,
+                detail="Vision predictions must be a supported class label",
+            )
+        expected = ordered["label"].astype(str).tolist()
+        student_predictions = uploaded["prediction"].tolist()
+        for model_id in TASK_MODEL_IDS[task]:
+            loaded = _require_model(request, task, model_id)
+            loader = DataLoader(
+                _dataset(ordered, DATA / "raw" / "equipment", False, model_id),
+                batch_size=32,
+                shuffle=False,
+            )
+            predictions: list[str] = []
+            with torch.inference_mode():
+                for images, _ in loader:
+                    outputs = loaded["estimator"](images)
+                    predictions.extend(
+                        CLASSES[index] for index in outputs.argmax(dim=1).tolist()
+                    )
+            baselines[model_id] = classification_metrics(expected, predictions, CLASSES)
+        submitted_metrics = classification_metrics(
+            expected, student_predictions, CLASSES
+        )
+
+    return {
+        "task": task,
+        "split": "validation",
+        "row_count": len(uploaded),
+        "metrics": submitted_metrics,
+        "baselines": baselines,
+        "prediction_file_saved": False,
+        "model_code_loaded": False,
+        "private_test_used": False,
+    }
 
 
 @app.get("/api/health")

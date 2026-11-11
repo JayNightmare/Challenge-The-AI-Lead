@@ -1401,6 +1401,48 @@ h2 em {
     font-size: 9px;
 }
 
+.prediction-submission {
+    margin-top: 16px;
+    border-top: 1px solid #d5d2c9;
+    padding-top: 13px;
+}
+
+.prediction-submission-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 9px;
+}
+
+.prediction-submission-actions .button {
+    min-height: 34px;
+    padding: 0 9px;
+    font-size: 9px;
+    text-decoration: none;
+}
+
+.csv-upload-input {
+    display: none;
+}
+
+.prediction-submission .disabled {
+    opacity: .6;
+    pointer-events: none;
+}
+
+.submission-safety,
+.submission-unavailable,
+.submission-error {
+    margin: 9px 0 0;
+    color: #747d88;
+    font-size: 8px;
+    line-height: 1.5;
+}
+
+.submission-error {
+    color: #8b3c2d;
+}
+
 .fight-ring {
     min-height: 340px;
     padding: 15px;

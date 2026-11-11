@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from ml.common.artifacts import load_metadata, model_paths, save_sklearn_artifact
+from ml.common.row_ids import row_ids_for
 from ml.common.splits import chronological_splits, grouped_stratified_splits
 from ml.tabular.pipeline import EXCLUDED, FEATURES, GroupedMeanRegressor
 from ml.text.pipeline import build_model
@@ -167,3 +168,14 @@ def test_student_export_omits_private_test_data_and_checksums(
     assert set(exported["split_sha256"]) == {"train", "validation"}
     assert not (output / "test.csv").exists()
     assert exported["test_split_included"] is False
+    exported_validation = pd.read_csv(output / "validation.csv")
+    assert exported_validation["row_id"].is_unique
+
+
+def test_submission_row_ids_are_stable_and_unique() -> None:
+    sms = pd.DataFrame({"group_id": ["duplicate", "duplicate", "other"]})
+    first = row_ids_for("text", sms, "validation")
+    assert first == row_ids_for("text", sms, "validation")
+    assert len(set(first)) == len(sms)
+    bike = pd.DataFrame({"dteday": ["2011-01-01", "2011-01-01"], "hr": [1, 2]})
+    assert len(set(row_ids_for("tabular", bike, "validation"))) == 2
