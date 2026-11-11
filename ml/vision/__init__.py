@@ -1,0 +1,1 @@
+"""Equipment image classification pipeline."""

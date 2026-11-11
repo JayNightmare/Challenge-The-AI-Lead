@@ -1,0 +1,17 @@
+{
+	"seed": 42,
+	"text": {
+		"validation_metrics_only_in_student_ui": true,
+		"group_duplicates_by_normalized_text": true
+	},
+	"tabular": {
+		"chronological_split_ratios": [0.7, 0.15, 0.15],
+		"prediction_clamp_minimum": 0
+	},
+	"vision": {
+		"classes": ["keyboard", "mouse", "headphones"],
+		"minimum_objects_per_class": 3,
+		"validation_warning_minimum_objects_per_class": 5,
+		"warning_threshold_target_accuracy": 0.8
+	}
+}
