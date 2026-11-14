@@ -27,7 +27,12 @@ notebooks/         thin experiment entry points calling ml modules
 5. Connect only locally available artifacts and validation summaries to the UI; retain test evaluation as organiser-only.
 6. Add tests, experiment notebooks, collection guidance, and reproducibility documentation.
 
-The initial workspace contained only `Mission.md`. No data, artifacts, tests, or dependency lockfiles were present. Implementation status is therefore based on code and test execution, not assumed training results.
+### Optional Milestones
+
+1. Implement account system for student to upload and manage their submissions.
+2. Implement student-facing feedback for validation and test results within the UI.
+3. Implement student leaderboard for points, comparing validation and test results within the UI.
+4. Point-based feedback for student submissions within the UI.
 
 ## Delivery Status
 
